@@ -3,8 +3,9 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 //for compiling for now use:
-//g++ -std=c++17 -Wall -Wextra -g server.cpp -o server.exe -lws2_32
+//g++ -std=c++17 -Wall -pthread -Wextra -g server.cpp -o server.exe -lws2_32
 
 
 #define DEFAULT_PORT "27015"
@@ -81,10 +82,31 @@ class ServerSocket{
             }
         }
 
+        void sendToClient(){
+            int iResult;
+            std::string input = "";
+            while (input != "exit"){
+                std::getline(std::cin, input);
+                // Send an initial buffer
+                iResult = send(this->clientSocket, input.c_str(), (int) strlen(input.c_str()), 0);
+                if (iResult == SOCKET_ERROR) {
+                    throw std::runtime_error("failed to send");
+                }
+
+            }
+            
+            // shutdown the connection for sending since no more data will be sent
+            // the client can still use the ConnectSocket for receiving data
+            iResult = shutdown(this->clientSocket, SD_SEND);
+            if (iResult == SOCKET_ERROR) {
+                throw std::runtime_error("failed to shutdown");
+            }
+        }
+
         void handleClient(){
             
             char recvbuf[512];
-            int iResult, iSendResult;
+            int iResult;
             int recvbuflen = 512;
 
             // Receive until the peer shuts down the connection
@@ -92,17 +114,9 @@ class ServerSocket{
 
                 iResult = recv(this->clientSocket, recvbuf, recvbuflen, 0);
                 if (iResult > 0) {
-                    std::cout << "Bytes received: " << iResult << std::endl;
-
                     //recvbuf is just the characters without the \n and \0 so i need to solve that
                     recvbuf[iResult] = '\n';
                     std::cout.write(recvbuf, iResult+1);
-                    // Echo the buffer back to the sender
-                    iSendResult = send(this->clientSocket, recvbuf, iResult, 0);
-                    if (iSendResult == SOCKET_ERROR) {
-                        throw std::runtime_error("failed");
-                    }
-                    std::cout << "Bytes sent: " << iSendResult << std::endl;
                 } else if (iResult == 0)
                     std::cout << "Connection closing...\n";
                 else {
@@ -124,13 +138,17 @@ void runServer(){
         serSocket.createSocket(&result);
         serSocket.bindSocket(&result);
 
-        freeaddrinfo(result);
-        result = nullptr;
+        freeaddrinfo(result); 
+        result = nullptr; //result is just for configuring so i dont need it anymore
 
         serSocket.startListening();
         serSocket.acceptClient();
 
-        serSocket.handleClient();
+        std::thread sendThread(&ServerSocket::sendToClient, &serSocket);
+        std::thread receiveThread(&ServerSocket::handleClient, &serSocket);
+
+        sendThread.join();
+        receiveThread.join();
     }
     catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

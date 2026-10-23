@@ -3,8 +3,9 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 //for compiling for now use:
-//g++ -std=c++17 -Wall -Wextra -g client.cpp -o client.exe -lws2_32
+//g++ -std=c++17 -static -pthread client.cpp -o client.exe -lws2_32
 
 
 #define DEFAULT_PORT "27015"
@@ -69,22 +70,19 @@ class ClientSocket{
             }
         }
 
-        void sendAndReceive(){
-            int recvbuflen = 512;
-
-            const char *sendbuf = "this is a test";
-            char recvbuf[512];
-
+        void sendToServer(){
             int iResult;
+            std::string input = "";
+            while (input != "exit"){
+                std::getline(std::cin, input);
+                // Send an initial buffer
+                iResult = send(this->connectSocket, input.c_str(), (int) strlen(input.c_str()), 0);
+                if (iResult == SOCKET_ERROR) {
+                    throw std::runtime_error("failed to send");
+                }
 
-            // Send an initial buffer
-            iResult = send(this->connectSocket, sendbuf, (int) strlen(sendbuf), 0);
-            if (iResult == SOCKET_ERROR) {
-                throw std::runtime_error("failed to send");
             }
-
-            std::cout << "Bytes sent: " << iResult << std::endl;
-
+            
             // shutdown the connection for sending since no more data will be sent
             // the client can still use the ConnectSocket for receiving data
             iResult = shutdown(this->connectSocket, SD_SEND);
@@ -92,16 +90,30 @@ class ClientSocket{
                 throw std::runtime_error("failed to shutdown");
             }
 
-            // Receive data until the server closes the connection
+            
+        }
+
+        void receiveFromServer(){
+            char recvbuf[512];
+            int iResult;
+            int recvbuflen = 512;
+
+            // Receive until the peer shuts down the connection
             do {
+
                 iResult = recv(this->connectSocket, recvbuf, recvbuflen, 0);
-                if (iResult > 0)
-                    std::cout << "Bytes received: " << iResult << std::endl;
-                else if (iResult == 0)
-                    std::cout << "Connection closed\n";
-                else
-                    throw std::runtime_error("failed to receive");
+                if (iResult > 0) {
+                    //recvbuf is just the characters without the \n and \0 so i need to solve that
+                    recvbuf[iResult] = '\n';
+                    std::cout.write(recvbuf, iResult+1);
+                } else if (iResult == 0)
+                    std::cout << "Connection closing...\n";
+                else {
+                    throw std::runtime_error("failed");
+                }
+
             } while (iResult > 0);
+        
         }
 
         SOCKET& getSocket(){
@@ -119,9 +131,14 @@ void runClient(const char* adress){
         clSocket.createSocket(&result);
         clSocket.connectToServer(result);
         freeaddrinfo(result);
-        result = nullptr;
+        result = nullptr; //result is just for configuring so i dont need it anymore
 
-        clSocket.sendAndReceive();
+        std::thread sendThread(&ClientSocket::sendToServer, &clSocket);
+        std::thread receiveThread(&ClientSocket::receiveFromServer, &clSocket);
+
+        sendThread.join();
+        receiveThread.join();
+        
     } catch(const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         if (result != nullptr) {
